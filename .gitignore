@@ -1,0 +1,17 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+venv-v2
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+*.log
+uploads/
+.DS_Store
+DEPLOYMENT_GUIDE.md
+INTERVIEW_WORKFLOW.md

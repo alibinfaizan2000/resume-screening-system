@@ -1,0 +1,405 @@
+================================================================================
+INTERVIEW_WORKFLOW.txt
+Resume Screening & Candidate Matching System — Architecture & Interview Guide
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. COMPLETE ARCHITECTURE EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SYSTEM OVERVIEW:
+This is a production-grade RAG (Retrieval-Augmented Generation) system that
+enables intelligent resume screening using LLMs, vector databases, and agentic
+workflows.
+
+ARCHITECTURE LAYERS:
+
+┌─────────────────────────────────────────────────────────────┐
+│                    PRESENTATION LAYER                       │
+│              Streamlit Frontend (Python)                    │
+│   Upload | Ranking Dashboard | Q&A Chat | Search Panel     │
+└──────────────────────┬──────────────────────────────────────┘
+                       │ HTTP REST
+┌──────────────────────▼──────────────────────────────────────┐
+│                      API LAYER                              │
+│                 FastAPI Backend                             │
+│   /resumes/upload | /matching/candidates | /qa/ask          │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                  ORCHESTRATION LAYER                        │
+│              LangGraph Agentic Workflow                     │
+│  Query Understanding → Retrieval → Reranking → Generation   │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                   INTELLIGENCE LAYER                        │
+│   Gemini 1.5 Pro (LLM) + Gemini Embeddings                 │
+│   Cross-Encoder Reranker + BM25 Sparse Retrieval           │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                    DATA LAYER                               │
+│           Pinecone Serverless Vector Database               │
+│           Dense Embeddings (768-dim cosine similarity)      │
+└─────────────────────────────────────────────────────────────┘
+                       │
+┌──────────────────────▼──────────────────────────────────────┐
+│                 OBSERVABILITY LAYER                         │
+│              LangSmith Tracing & Monitoring                 │
+│     Latency | Token Usage | Retrieval Quality | Prompts    │
+└─────────────────────────────────────────────────────────────┘
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. END-TO-END WORKFLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+INGESTION PIPELINE:
+1. User uploads PDF resumes via Streamlit UI
+2. FastAPI receives files via multipart/form-data
+3. PyMuPDF (fitz) extracts raw text from each PDF
+4. RecursiveCharacterTextSplitter chunks text:
+   - Chunk size: 512 tokens
+   - Overlap: 64 tokens (12.5%)
+   - Separators: ["\n\n", "\n", ".", " ", ""]
+5. Gemini text-embedding-001 embeds each chunk (768-dim)
+6. Embeddings + metadata upserted to Pinecone in batches of 100
+7. Metadata stored: filename, chunk_index, total_chunks, text
+
+QUERY PIPELINE (Q&A / Matching):
+1. User submits query or job description
+2. LangGraph workflow activates (traced in LangSmith)
+3. Query Understanding Node: classifies query intent using Gemini
+4. Dense Retrieval: embed query → cosine search in Pinecone
+5. Sparse Retrieval: BM25 on dense results corpus
+6. Merge: union of dense + sparse, deduplicated
+7. Cross-Encoder Reranking: ms-marco-MiniLM-L-6-v2 scores pairs
+8. Context Builder: formats chunks with source attribution
+9. Gemini Generation: grounded answer with [Source N] citations
+10. Citation Verification: ensures answer cites retrieved chunks
+11. Response: structured JSON with answer + sources
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. HYBRID SEARCH EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHY HYBRID SEARCH?
+Dense-only search misses exact keyword matches (e.g., "PyTorch", "AWS").
+Sparse-only search misses semantic similarity (e.g., "MLOps" ≈ "model deployment").
+Hybrid search combines both for comprehensive recall.
+
+DENSE RETRIEVAL (Semantic):
+- Query embedded with Gemini embedding-001 (768-dim vector)
+- Cosine similarity search in Pinecone
+- Finds semantically similar content even with different vocabulary
+- Example: "machine learning deployment" finds "model serving infrastructure"
+
+SPARSE RETRIEVAL (Lexical / BM25):
+- BM25 (Best Match 25) is a probabilistic TF-IDF variant
+- Applied over the dense retrieval results corpus
+- Exact keyword matching with term frequency normalization
+- Example: "FastAPI" must literally appear in the resume
+
+MERGING STRATEGY:
+- Union of dense + sparse results
+- Deduplication by chunk_id
+- Preserves original scores for reranking stage
+
+RESULT: Higher recall than either method alone, capturing both
+semantic meaning and exact technical keyword matches.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. RE-RANKING EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+MODEL: cross-encoder/ms-marco-MiniLM-L-6-v2
+
+WHY RE-RANKING?
+Bi-encoder retrieval (dense) is fast but approximate.
+Cross-encoder re-ranking is slower but far more accurate.
+Two-stage: fast retrieval (recall) → precise reranking (precision).
+
+HOW CROSS-ENCODER WORKS:
+- Takes (query, document) pair as input
+- Processes both jointly through BERT-style attention
+- Outputs a relevance score for the pair
+- Unlike bi-encoder, can capture query-document interaction
+
+RERANKING PIPELINE:
+1. Retrieve Top-20 candidates (hybrid)
+2. Feed all (query, chunk) pairs to cross-encoder
+3. Score each pair independently
+4. Sort by cross-encoder score descending
+5. Return Top-5 for generation
+
+WHY ms-marco-MiniLM-L-6-v2?
+- Trained on MS MARCO passage retrieval dataset (510K queries)
+- Lightweight (22M params) — fast inference
+- State-of-art performance on passage re-ranking
+- Free, open-source via HuggingFace
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. GROUNDING & HALLUCINATION PREVENTION STRATEGY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+HALLUCINATION RISKS IN RESUME SCREENING:
+- LLM inventing skills a candidate doesn't have
+- Incorrect match percentages
+- Fabricated work experience
+
+GROUNDING MECHANISMS IMPLEMENTED:
+
+1. RETRIEVAL-CONSTRAINED GENERATION:
+   System prompt explicitly instructs: "Answer STRICTLY based on provided chunks."
+   "If information is not in the context, say 'No supporting information found.'"
+
+2. EVIDENCE-FIRST CONTEXT:
+   Every generation prompt includes verbatim retrieved chunks.
+   LLM is constrained to only use this context.
+
+3. CITATION ENFORCEMENT:
+   Generation prompt requires [Source N] inline citations.
+   Post-generation verification checks citation presence.
+   If absent, citations are appended programmatically.
+
+4. FALLBACK RESPONSE:
+   If no chunks retrieved: returns "No supporting information found in retrieved resumes."
+   If citation verification fails: adds citation footer automatically.
+
+5. CANDIDATE ANALYSIS GROUNDING:
+   Each candidate analysis uses only their retrieved chunks.
+   JSON schema constrains output to valid fields.
+   No cross-candidate contamination.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. CITATION STRATEGY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+EVERY ANSWER INCLUDES:
+- Resume filename (e.g., "john_doe_resume.pdf")
+- Chunk ID (e.g., "john_doe_resume.pdf__chunk_3")
+- Retrieved chunk text (first 300 chars shown)
+- Relevance/rerank score
+- [Source N] inline references in generated text
+
+UI DISPLAY:
+- "Retrieved Sources" expander panel in Q&A view
+- Source chips with filename + chunk ID
+- Code block showing chunk text
+- Score displayed numerically
+
+CITATION ENFORCEMENT IN CODE:
+```python
+def citation_verification_node(state):
+    has_citation = any(
+        f"[Source {i+1}]" in answer or src["filename"] in answer
+        for i, src in enumerate(sources)
+    )
+    if not has_citation:
+        state["answer"] += f"\n\nSources: {citations}"
+```
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7. LANGGRAPH WORKFLOW EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHY LANGGRAPH?
+- Directed Acyclic Graph (DAG) for complex multi-step reasoning
+- State management between nodes
+- Native LangSmith tracing integration
+- Production-grade observability
+- Easily extensible with conditional edges
+
+NODES IMPLEMENTED:
+
+Node 1: query_understanding
+  - Input: raw user question
+  - Process: Gemini classifies intent into 4 categories
+  - Output: query_intent (candidate_ranking | skill_search | comparison | general_qa)
+  - Why: Different intents could route to different retrieval strategies
+
+Node 2: dense_retrieval
+  - Input: query (+ job description context if provided)
+  - Process: Gemini embed → Pinecone cosine search
+  - Output: Top-20 dense results with scores and metadata
+
+Node 3: sparse_retrieval
+  - Input: query + dense results as corpus
+  - Process: BM25 over dense corpus
+  - Output: Top-10 BM25-scored results
+
+Node 4: merge_results
+  - Input: dense + sparse results
+  - Process: Union, deduplicate by chunk_id
+  - Output: Combined unique candidates
+
+Node 5: reranking
+  - Input: merged results
+  - Process: Dedup + Cross-encoder scoring
+  - Output: Top-5 highest-precision results
+
+Node 6: context_builder
+  - Input: reranked results
+  - Process: Format chunks with source attribution
+  - Output: Structured context string + sources list + citations
+
+Node 7: generation
+  - Input: query + JD context + formatted context
+  - Process: Gemini 1.5 Pro with grounding system prompt
+  - Output: Cited, evidence-based answer
+
+Node 8: citation_verification
+  - Input: generated answer + sources
+  - Process: Verify [Source N] presence
+  - Output: Verified answer (with auto-appended citations if needed)
+
+WORKFLOW GRAPH:
+query_understanding → dense_retrieval → sparse_retrieval → merge_results
+    → reranking → context_builder → generation → citation_verification → END
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+8. MONITORING & OBSERVABILITY (LANGSMITH)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+WHAT IS TRACKED:
+- User queries (inputs)
+- Query intent classification
+- Dense retrieval results (which chunks retrieved)
+- Sparse BM25 scores
+- Reranking scores before/after
+- Exact prompt sent to Gemini
+- Exact response from Gemini
+- End-to-end latency per node
+- Token usage (input + output tokens)
+- Citation verification result
+
+HOW TO ACCESS:
+1. Go to smith.langchain.com
+2. Navigate to project "resume-screening-system"
+3. View traces for each workflow run
+4. Compare runs, debug retrieval failures
+
+LANGSMITH DECORATORS USED:
+@traceable(name="resume_qa_workflow")  — wraps the full workflow run
+@traceable(name="analyze_candidate")  — tracks per-candidate analysis
+@traceable(name="match_candidates")   — tracks the full matching pipeline
+
+WHY THIS MATTERS FOR INTERVIEWS:
+"I implemented end-to-end observability using LangSmith, which lets me trace
+every step of the RAG pipeline — from retrieval quality to generation latency —
+enabling data-driven optimization rather than guesswork."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+9. HOW TO EXPLAIN THIS PROJECT IN INTERVIEWS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+30-SECOND ELEVATOR PITCH:
+"I built a production-grade AI resume screening system that helps recruiters
+match candidates to job descriptions using RAG. The system ingests PDF resumes,
+chunks and embeds them into Pinecone using Gemini embeddings, then uses a
+LangGraph agentic workflow to run hybrid search (dense + BM25 sparse), rerank
+with a cross-encoder, and generate grounded, cited answers using Gemini 1.5 Pro.
+Everything is traced in LangSmith for observability."
+
+2-MINUTE TECHNICAL EXPLANATION:
+"The system has three main components:
+
+First, the ingestion pipeline. When a recruiter uploads resumes, I extract text
+using PyMuPDF, chunk it with RecursiveCharacterTextSplitter at 512 tokens with
+12.5% overlap, embed chunks with Gemini's text-embedding-001, and store vectors
+in Pinecone along with metadata like filename and chunk index.
+
+Second, the retrieval pipeline. I implemented hybrid search combining dense
+vector search in Pinecone with BM25 sparse retrieval over the dense corpus.
+The merged results go through cross-encoder reranking using ms-marco-MiniLM-L-6-v2
+to maximize precision in the top-5 results.
+
+Third, the agentic workflow in LangGraph. The graph has 8 nodes: query
+understanding, dense retrieval, sparse retrieval, merging, reranking, context
+building, Gemini generation with grounding constraints, and citation verification.
+Every run is traced end-to-end in LangSmith."
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+10. EXPECTED INTERVIEW QUESTIONS & ANSWERS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Q: What is RAG and why did you use it?
+A: RAG (Retrieval-Augmented Generation) grounds LLM responses in real retrieved
+documents. Without RAG, the LLM would generate answers from training data, which
+doesn't include these specific resumes. RAG lets the LLM reason over actual
+resume content, preventing hallucination and enabling factual, up-to-date answers.
+
+Q: Why Pinecone over other vector databases?
+A: Pinecone is a managed, serverless vector database optimized for similarity
+search. It handles scaling automatically, offers sub-100ms p99 latency at scale,
+and has a generous free tier. Alternatives like Weaviate or Qdrant are also valid,
+but Pinecone's serverless model avoids infrastructure management.
+
+Q: Why chunk at 512 tokens with 10-20% overlap?
+A: 512 tokens is the sweet spot for resume content — large enough to capture a
+complete experience entry, small enough for precise retrieval. Overlap (64 tokens)
+prevents important context from being split at boundaries. Larger chunks hurt
+retrieval precision; smaller chunks lose context for generation.
+
+Q: What is the difference between bi-encoder and cross-encoder?
+A: Bi-encoders (like Gemini embeddings) encode query and document independently,
+enabling fast offline indexing and approximate retrieval. Cross-encoders process
+the (query, document) pair jointly through full attention, enabling precise
+relevance scoring but requiring inference at query time. We use bi-encoder for
+retrieval (fast, scalable) and cross-encoder for reranking (precise, applied
+to small candidate set).
+
+Q: How do you prevent hallucination?
+A: Four mechanisms: (1) System prompt explicitly restricts answers to retrieved
+context. (2) Retrieved chunks are embedded verbatim in the generation prompt.
+(3) [Source N] citation enforcement — answers must cite sources. (4) Fallback
+message when retrieval finds nothing. Additionally, I set Gemini temperature
+to 0.1 to reduce creativity in favor of factual grounding.
+
+Q: Why LangGraph over a simple chain?
+A: LangGraph provides explicit state management, conditional routing, and node-
+level observability. For a production system, I need to be able to extend nodes
+independently (e.g., add query rewriting or self-reflection), visualize the
+workflow graph, and trace each node's performance separately in LangSmith.
+A simple chain lacks this modularity and visibility.
+
+Q: How does BM25 complement dense retrieval?
+A: Dense retrieval excels at semantic similarity but can miss exact technical
+terms like "PyTorch 2.0" or specific library names. BM25 does exact term
+matching with TF-IDF style scoring. In resume screening, candidates often
+match via specific technology names, so sparse retrieval significantly boosts
+recall for keyword-heavy queries.
+
+Q: How would you scale this to 100,000 resumes?
+A: (1) Pinecone scales horizontally automatically. (2) Replace in-memory BM25
+with Elasticsearch for distributed sparse retrieval. (3) Add Redis caching for
+repeated query embeddings. (4) Batch the cross-encoder inference with GPU
+acceleration. (5) Add async processing queues (Celery/Redis) for ingestion.
+(6) Implement namespace sharding in Pinecone by department or date range.
+
+Q: What MLOps practices did you implement?
+A: (1) LangSmith for end-to-end tracing and monitoring. (2) Pydantic for
+input/output validation. (3) FastAPI with structured error handling. (4) Docker
+for containerized, reproducible deployment. (5) Render for backend (auto-scaling,
+health checks), Streamlit Cloud for frontend. (6) Environment-based configuration
+with .env files. (7) Proper dependency pinning in requirements.txt.
+
+Q: What would you add given more time?
+A: (1) Query rewriting node in LangGraph for intent disambiguation. (2) Self-
+reflection node for answer quality scoring. (3) Resume parsing to extract
+structured fields (skills, education, experience) for metadata-filtered retrieval.
+(4) Candidate comparison report generation as PDF download. (5) A/B testing
+framework for prompt comparison in LangSmith. (6) Authentication and multi-user
+support. (7) Async ingestion pipeline with progress streaming via WebSockets.
+
+================================================================================

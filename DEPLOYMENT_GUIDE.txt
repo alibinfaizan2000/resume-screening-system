@@ -1,0 +1,268 @@
+================================================================================
+DEPLOYMENT_GUIDE.txt
+Resume Screening & Candidate Matching System — Deployment Guide
+================================================================================
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 1 — LOCAL SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PREREQUISITES:
+- Python 3.11+
+- pip
+- Git
+
+STEP 1 — Clone the repository:
+  git clone https://github.com/yourusername/resume-screening-system.git
+  cd resume-screening-system
+
+STEP 2 — Create and activate a virtual environment:
+  python -m venv venv
+
+  On Linux/Mac:
+    source venv/bin/activate
+
+  On Windows:
+    venv\Scripts\activate
+
+STEP 3 — Install dependencies:
+  pip install -r requirements.txt
+
+  Note: sentence-transformers downloads the cross-encoder model (~80MB) on
+  first run. Ensure internet access during first startup.
+
+STEP 4 — Configure environment variables:
+  cp .env.example .env
+
+  Edit .env and fill in:
+    GEMINI_API_KEY=          (from Google AI Studio)
+    PINECONE_API_KEY=        (from Pinecone console)
+    PINECONE_INDEX_NAME=     resume-screening
+    PINECONE_ENVIRONMENT=    us-east-1
+    LANGSMITH_API_KEY=       (from smith.langchain.com)
+    LANGSMITH_PROJECT=       resume-screening-system
+    LANGCHAIN_TRACING_V2=    true
+    BACKEND_URL=             http://localhost:8000
+
+STEP 5 — Run the backend:
+  uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+
+  Verify: http://localhost:8000/docs (Swagger UI)
+  Verify: http://localhost:8000/health (should return {"status": "healthy"})
+
+STEP 6 — Run the frontend (new terminal, same venv):
+  cd frontend
+  streamlit run app.py
+
+  Verify: http://localhost:8501
+
+STEP 7 — Test the full flow:
+  1. Open http://localhost:8501
+  2. Go to "Upload Resumes"
+  3. Upload 2-3 PDF resumes
+  4. Go to "Candidate Ranking"
+  5. Paste a job description and click "Match Candidates"
+  6. Go to "Resume Q&A" and ask a question
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 2 — EXTERNAL SERVICE SETUP
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PINECONE SETUP:
+1. Go to https://pinecone.io and create a free account
+2. Create a new project
+3. Go to API Keys → copy your API key
+4. The index ("resume-screening") is created automatically on first run
+   with dimension=768, metric=cosine, serverless on AWS us-east-1
+5. Free tier supports up to 1 serverless index (sufficient for demo)
+
+GEMINI API SETUP:
+1. Go to https://aistudio.google.com
+2. Click "Get API Key" → Create API Key
+3. Copy the key to GEMINI_API_KEY in .env
+4. Models used:
+   - Embedding: models/embedding-001 (768-dim)
+   - Generation: gemini-1.5-pro
+5. Free tier: 15 RPM (requests per minute) — sufficient for demo
+
+LANGSMITH SETUP:
+1. Go to https://smith.langchain.com
+2. Create an account (free tier available)
+3. Create a new project named "resume-screening-system"
+4. Go to Settings → API Keys → Create API Key
+5. Copy to LANGSMITH_API_KEY in .env
+6. Traces will appear in the project after first workflow run
+7. If you don't want monitoring, set LANGCHAIN_TRACING_V2=false
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 3 — RENDER BACKEND DEPLOYMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Push your code to GitHub:
+   git init
+   git add .
+   git commit -m "Initial commit: Resume Screening System"
+   git remote add origin https://github.com/yourusername/resume-screening-system.git
+   git push -u origin main
+
+2. Go to https://render.com and create a free account
+
+3. New → Web Service → Connect GitHub repository
+
+4. Configure the service:
+   Name:          resume-screening-api
+   Runtime:       Python 3
+   Build Command: pip install -r requirements.txt
+   Start Command: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+
+5. Add Environment Variables (Environment tab):
+   GEMINI_API_KEY         = your_key
+   PINECONE_API_KEY       = your_key
+   PINECONE_INDEX_NAME    = resume-screening
+   PINECONE_ENVIRONMENT   = us-east-1
+   LANGSMITH_API_KEY      = your_key
+   LANGSMITH_PROJECT      = resume-screening-system
+   LANGCHAIN_TRACING_V2   = true
+   LANGCHAIN_ENDPOINT     = https://api.smith.langchain.com
+
+6. Click "Create Web Service"
+   First deploy takes ~5 minutes (downloads sentence-transformers model)
+
+7. Your backend URL will be:
+   https://resume-screening-api.onrender.com
+
+   Note: Free Render instances spin down after 15 minutes of inactivity.
+   First request after spin-down takes ~30 seconds. Upgrade to paid ($7/mo)
+   for always-on for interview demos.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 4 — STREAMLIT CLOUD FRONTEND DEPLOYMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Go to https://streamlit.io/cloud and sign in with GitHub
+
+2. Click "New app"
+   Repository:   yourusername/resume-screening-system
+   Branch:       main
+   Main file:    frontend/app.py
+
+3. Advanced Settings → Secrets — add:
+   BACKEND_URL = "https://resume-screening-api.onrender.com"
+
+4. Click "Deploy"
+   Build takes 2-3 minutes
+
+5. Your frontend URL will be:
+   https://yourusername-resume-screening-system-app-XXXXX.streamlit.app
+
+6. Share this URL for interviews and demonstrations
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 5 — DOCKER DEPLOYMENT (OPTIONAL)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Build and run locally:
+  docker build -t resume-screening-api .
+  docker run -p 8000:8000 --env-file .env resume-screening-api
+
+Run frontend separately (not in Docker — use pip install streamlit):
+  cd frontend && streamlit run app.py
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 6 — VERIFICATION & TESTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+TEST BACKEND ENDPOINTS (curl or Swagger UI at /docs):
+
+Health check:
+  curl https://your-backend.onrender.com/health
+
+Upload a resume:
+  curl -X POST "https://your-backend.onrender.com/api/v1/resumes/upload" \
+    -F "files=@john_doe.pdf"
+
+Match candidates:
+  curl -X POST "https://your-backend.onrender.com/api/v1/matching/candidates" \
+    -H "Content-Type: application/json" \
+    -d '{"job_description": "ML Engineer with Python and PyTorch experience", "top_k": 3}'
+
+Ask a question:
+  curl -X POST "https://your-backend.onrender.com/api/v1/qa/ask" \
+    -H "Content-Type: application/json" \
+    -d '{"question": "Who has experience with RAG systems?"}'
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 7 — SAMPLE DATA FOR DEMO
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+SAMPLE JOB DESCRIPTION 1 — Senior ML Engineer:
+  We are looking for a Senior ML Engineer with 3+ years of experience in Python,
+  PyTorch, TensorFlow, and scikit-learn. The role requires hands-on experience
+  with LLM applications, RAG systems, vector databases (Pinecone, Weaviate),
+  and production model deployment. FastAPI, Docker, Kubernetes, and AWS/GCP
+  experience are required. MLOps, monitoring, and CI/CD are a plus.
+
+SAMPLE JOB DESCRIPTION 2 — Data Scientist:
+  Data Scientist with strong statistical background. Required: Python, R, SQL,
+  pandas, NumPy, machine learning (classification, regression, clustering),
+  A/B testing, feature engineering, and Tableau/PowerBI for visualization.
+  Experience with Spark for big data processing is a plus.
+
+SAMPLE QUESTIONS FOR Q&A DEMO:
+  1. "Who is the best candidate for an ML Engineer role?"
+  2. "Which candidates have experience with RAG or LLM systems?"
+  3. "Who has production deployment or MLOps experience?"
+  4. "Which candidate has the strongest Python background?"
+  5. "Compare the top two candidates side by side."
+  6. "Which candidates have worked with FastAPI?"
+  7. "Who has the most relevant GenAI project experience?"
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PART 8 — INTERVIEW DEMO FLOW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+RECOMMENDED 5-MINUTE DEMO SCRIPT:
+
+0:00 — Open Streamlit app. Show clean UI. Say:
+  "This is an end-to-end AI resume screening system I built using RAG,
+  LangGraph, Gemini, and Pinecone."
+
+0:30 — Navigate to "Upload Resumes". Upload 3 PDFs. Say:
+  "Resumes are extracted with PyMuPDF, chunked with RecursiveCharacterTextSplitter,
+  embedded with Gemini embeddings, and stored in Pinecone."
+
+1:30 — Navigate to "Candidate Ranking". Paste JD. Click Match. Say:
+  "The system runs a LangGraph workflow: dense retrieval from Pinecone,
+  BM25 sparse retrieval, cross-encoder reranking, then Gemini generates
+  a grounded analysis for each candidate."
+
+2:30 — Show the ranking dashboard with match percentages and bar chart. Say:
+  "Each candidate gets a match percentage, matching/missing skills,
+  strengths, weaknesses, and an evidence-backed recommendation."
+
+3:00 — Navigate to "Resume Q&A". Ask: "Who has RAG experience?" Say:
+  "This uses the full LangGraph workflow. The answer is generated strictly
+  from retrieved resume chunks — see the sources panel here."
+
+3:30 — Show the Retrieved Sources panel. Say:
+  "Every claim is traceable to a specific resume chunk with its relevance score.
+  This prevents hallucination — if it's not in the resume, the system won't
+  claim it."
+
+4:00 — Mention LangSmith. Say:
+  "Every run is traced in LangSmith where I can monitor latency, token usage,
+  retrieval quality, and prompt inputs/outputs for each workflow node."
+
+4:30 — Wrap up. Say:
+  "The backend is deployed on Render, frontend on Streamlit Cloud.
+  Full source code is on GitHub."
+
+================================================================================
