@@ -4,6 +4,7 @@ from functools import lru_cache
 
 class Settings(BaseSettings):
     groq_api_key: str
+    cohere_api_key: str
     pinecone_api_key: str
     pinecone_index_name: str = "resume-screening"
     pinecone_environment: str = "us-east-1"
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     chunk_overlap: int = 64
     top_k_retrieval: int = 10
     top_k_rerank: int = 5
-    embedding_dimension: int = 768
+    embedding_dimension: int = 1024
 
     class Config:
         env_file = ".env"

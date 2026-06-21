@@ -1,18 +1,18 @@
-from sentence_transformers import SentenceTransformer
+import cohere
 from langchain_groq import ChatGroq
 from backend.core.config import get_settings
 
 settings = get_settings()
 
-_embedder = None
+_cohere_client = None
 _llm = None
 
 
-def get_embedder() -> SentenceTransformer:
-    global _embedder
-    if _embedder is None:
-        _embedder = SentenceTransformer("BAAI/bge-base-en-v1.5")
-    return _embedder
+def get_cohere_client() -> cohere.Client:
+    global _cohere_client
+    if _cohere_client is None:
+        _cohere_client = cohere.Client(api_key=settings.cohere_api_key)
+    return _cohere_client
 
 
 def get_llm() -> ChatGroq:
@@ -28,16 +28,20 @@ def get_llm() -> ChatGroq:
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
-    embedder = get_embedder()
-    embeddings = embedder.encode(
-        texts, normalize_embeddings=True, show_progress_bar=False
+    client = get_cohere_client()
+    response = client.embed(
+        texts=texts,
+        model="embed-english-v3.0",
+        input_type="search_document",
     )
-    return embeddings.tolist()
+    return response.embeddings
 
 
 def embed_query(query: str) -> list[float]:
-    embedder = get_embedder()
-    embedding = embedder.encode(
-        [query], normalize_embeddings=True, show_progress_bar=False
-    )[0]
-    return embedding.tolist()
+    client = get_cohere_client()
+    response = client.embed(
+        texts=[query],
+        model="embed-english-v3.0",
+        input_type="search_query",
+    )
+    return response.embeddings[0]
