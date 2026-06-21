@@ -1,19 +1,9 @@
 from rank_bm25 import BM25Okapi
-from sentence_transformers import CrossEncoder
-from backend.services.llm_service import embed_query
+from backend.services.llm_service import embed_query, get_cohere_client
 from backend.services.pinecone_service import query_vectors, get_index_stats
 from backend.core.config import get_settings
 
 settings = get_settings()
-
-_cross_encoder = None
-
-
-def get_cross_encoder() -> CrossEncoder:
-    global _cross_encoder
-    if _cross_encoder is None:
-        _cross_encoder = CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
-    return _cross_encoder
 
 
 def dense_retrieval(query: str, top_k: int = None) -> list[dict]:
@@ -83,15 +73,23 @@ def rerank_results(query: str, candidates: list[dict], top_k: int = None) -> lis
     if not candidates:
         return []
 
-    cross_encoder = get_cross_encoder()
-    pairs = [[query, doc["text"]] for doc in candidates]
-    scores = cross_encoder.predict(pairs)
+    client = get_cohere_client()
+    documents = [doc["text"] for doc in candidates]
 
-    for doc, score in zip(candidates, scores):
-        doc["rerank_score"] = float(score)
+    response = client.rerank(
+        query=query,
+        documents=documents,
+        top_n=min(k, len(documents)),
+        model="rerank-english-v3.0",
+    )
 
-    reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
-    return reranked[:k]
+    reranked = []
+    for result in response.results:
+        doc = candidates[result.index]
+        doc["rerank_score"] = float(result.relevance_score)
+        reranked.append(doc)
+
+    return reranked
 
 
 def deduplicate_context(docs: list[dict]) -> list[dict]:
